@@ -1,0 +1,61 @@
+name: Build ExtendReality iOS IPA (Unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Resolve SPM Dependencies
+        run: xcodebuild -resolvePackageDependencies -project ExtendReality.xcodeproj -scheme ExtendReality
+
+      - name: Build Archive (iOS ARM64 Device)
+        run: |
+          xcodebuild archive \
+            -project ExtendReality.xcodeproj \
+            -scheme ExtendReality \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath build/ExtendReality.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package into IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R build/ExtendReality.xcarchive/Products/Applications/ExtendReality.app build/Payload/
+          cd build
+          zip -r ExtendReality.ipa Payload
+
+      - name: Verify IPA
+        run: |
+          unzip -l build/ExtendReality.ipa | grep "Payload/ExtendReality.app/"
+          file build/Payload/ExtendReality.app/ExtendReality
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtendReality-iOS-IPA
+          path: build/ExtendReality.ipa
+          retention-days: 30
