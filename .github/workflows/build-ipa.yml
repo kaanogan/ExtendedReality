@@ -22,9 +22,29 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Strip Entitlements for Unsigned Build
+      - name: Clean project.yml for Unsigned Build
         run: |
-          sed -i '' '/entitlements:/d' project.yml
+          ruby -r yaml -e '
+            data = YAML.load_file("project.yml")
+            if data["targets"]
+              data["targets"].each do |name, target|
+                target.delete("entitlements")
+                target["settings"] ||= {}
+                target["settings"]["base"] ||= {}
+                target["settings"]["base"]["CODE_SIGNING_ALLOWED"] = "NO"
+                target["settings"]["base"]["CODE_SIGNING_REQUIRED"] = "NO"
+                target["settings"]["base"]["CODE_SIGN_IDENTITY"] = ""
+                target["settings"]["base"]["DEVELOPMENT_TEAM"] = ""
+                target["settings"]["base"]["PROVISIONING_PROFILE_SPECIFIER"] = ""
+                if target["dependencies"]
+                  target["dependencies"].each do |dep|
+                    dep["codeSign"] = false if dep.is_a?(Hash) && dep.key?("codeSign")
+                  end
+                end
+              end
+            end
+            File.write("project.yml", data.to_yaml)
+          '
 
       - name: Generate Xcode Project
         run: xcodegen generate
@@ -51,7 +71,8 @@ jobs:
       - name: Package into IPA
         run: |
           mkdir -p build/Payload
-          cp -R build/DerivedData/Build/Products/Release-iphoneos/ExtendReality.app build/Payload/
+          APP_PATH=$(find build/DerivedData -name "ExtendReality.app" -type d | head -n 1)
+          cp -R "$APP_PATH" build/Payload/
           cd build
           zip -r ExtendReality.ipa Payload
 
