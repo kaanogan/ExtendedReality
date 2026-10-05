@@ -22,6 +22,10 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Strip Entitlements for Unsigned Build
+        run: |
+          sed -i '' '/entitlements:/d' project.yml
+
       - name: Generate Xcode Project
         run: xcodegen generate
 
@@ -36,9 +40,9 @@ jobs:
             -destination "generic/platform=iOS" \
             -configuration Release \
             -derivedDataPath build/DerivedData \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
