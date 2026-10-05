@@ -33,7 +33,7 @@ jobs:
           xcodebuild archive \
             -project ExtendReality.xcodeproj \
             -scheme ExtendReality \
-            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -configuration Release \
             -archivePath build/ExtendReality.xcarchive \
             CODE_SIGN_IDENTITY="-" \
