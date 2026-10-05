@@ -1,77 +1,236 @@
 name: Build ExtendReality iOS IPA (Unsigned)
-
 on:
   workflow_dispatch:
   push:
     branches:
       - main
       - master
-
+permissions:
+  contents: read
 jobs:
   build-ipa:
     runs-on: macos-15
+    timeout-minutes: 60
     steps:
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: true
-
-      - name: Select Xcode Version
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode.app
-
+          submodules: recursive
+          fetch-depth: 0
+      # ---------------------------------------------------------
+      # 2. Select Xcode 16.4
+      # ---------------------------------------------------------
+      - name: Select Xcode
+        run: |
+          set -e
+          if [ -d "/Applications/Xcode_16.4.app" ]; then
+            sudo xcode-select -s "/Applications/Xcode_16.4.app"
+          elif [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s "/Applications/Xcode_16.2.app"
+          else
+            sudo xcode-select -s "/Applications/Xcode.app"
+          fi
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+      # ---------------------------------------------------------
+      # 3. Install XcodeGen
+      # ---------------------------------------------------------
       - name: Install XcodeGen
-        run: brew install xcodegen
-
+        run: |
+          set -e
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "XcodeGen already installed"
+          else
+            brew install xcodegen
+          fi
+          xcodegen --version
+      # ---------------------------------------------------------
+      # 4. Generate Xcode project
+      # ---------------------------------------------------------
       - name: Generate Xcode Project
-        run: xcodegen generate
-
-      - name: Patch Xcode Project Build Settings
         run: |
-          sed -i '' 's/CODE_SIGN_ENTITLEMENTS = .*/CODE_SIGN_ENTITLEMENTS = "";/g' ExtendReality.xcodeproj/project.pbxproj
-          sed -i '' 's/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = "";/g' ExtendReality.xcodeproj/project.pbxproj
-          sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = .*/PROVISIONING_PROFILE_SPECIFIER = "";/g' ExtendReality.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGN_IDENTITY = .*/CODE_SIGN_IDENTITY = "";/g' ExtendReality.xcodeproj/project.pbxproj
-
+          set -e
+          rm -rf ExtendReality.xcodeproj
+          xcodegen generate
+          test -d ExtendReality.xcodeproj
+          test -f ExtendReality.xcodeproj/project.pbxproj
+      # ---------------------------------------------------------
+      # 5. Show project information
+      # ---------------------------------------------------------
+      - name: Inspect Xcode Project
+        run: |
+          set -e
+          echo "===== XCODE VERSION ====="
+          xcodebuild -version
+          echo "===== AVAILABLE SCHEMES ====="
+          xcodebuild \
+            -project ExtendReality.xcodeproj \
+            -list
+      # ---------------------------------------------------------
+      # 6. Resolve Swift Package dependencies
+      # ---------------------------------------------------------
       - name: Resolve SPM Dependencies
-        run: xcodebuild -resolvePackageDependencies -project ExtendReality.xcodeproj -scheme ExtendReality
-
-      - name: Build Application (iOS ARM64 Device)
         run: |
-          xcodebuild build \
+          set -e
+          mkdir -p build/SourcePackages
+          xcodebuild \
+            -resolvePackageDependencies \
             -project ExtendReality.xcodeproj \
             -scheme ExtendReality \
-            -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath build/SourcePackages
+      # ---------------------------------------------------------
+      # 7. Build unsigned iOS ARM64 application
+      # ---------------------------------------------------------
+      - name: Build ExtendReality
+        run: |
+          set -o pipefail
+          rm -rf build/DerivedData
+          mkdir -p build
+          xcodebuild \
+            -project ExtendReality.xcodeproj \
+            -scheme ExtendReality \
             -configuration Release \
+            -destination "generic/platform=iOS" \
             -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -sdk iphoneos \
+            -arch arm64 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            CODE_SIGN_STYLE=Manual \
             ENABLE_USER_SCRIPT_SANDBOXING=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO
-
-      - name: Package into IPA
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            | tee build/xcodebuild.log
+      # ---------------------------------------------------------
+      # 8. Find the actual iOS app
+      # ---------------------------------------------------------
+      - name: Locate ExtendReality.app
         run: |
-          mkdir -p build/Payload
-          APP_PATH=$(find build/DerivedData -name "ExtendReality.app" -type d | head -n 1)
+          set -e
+          echo "===== SEARCHING FOR APP ====="
+          find build/DerivedData \
+            -type d \
+            -name "ExtendReality.app" \
+            -print
+          APP_PATH=$(find build/DerivedData \
+            -type d \
+            -name "ExtendReality.app" \
+            -path "*/Build/Products/Release-iphoneos/*" \
+            | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "Error: ExtendReality.app not found in DerivedData"
+            echo "ERROR: ExtendReality.app was not produced."
+            echo ""
+            echo "===== LAST XCODE ERRORS ====="
+            grep -E "error:|fatal error:" build/xcodebuild.log | tail -n 100 || true
             exit 1
           fi
-          cp -R "$APP_PATH" build/Payload/
-          cd build
-          zip -r ExtendReality.ipa Payload
-
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          echo "Found:"
+          echo "$APP_PATH"
+      # ---------------------------------------------------------
+      # 9. Verify ARM64 binary
+      # ---------------------------------------------------------
+      - name: Verify ARM64 Device Binary
+        run: |
+          set -e
+          APP="$APP_PATH"
+          BINARY="$APP/ExtendReality"
+          test -f "$BINARY"
+          echo "===== FILE TYPE ====="
+          file "$BINARY"
+          echo "===== ARCHITECTURES ====="
+          lipo -info "$BINARY"
+          echo "===== MACH-O INFO ====="
+          otool -hv "$BINARY" | head -n 5
+          if ! lipo -info "$BINARY" | grep -q "arm64"; then
+            echo "ERROR: ARM64 architecture was not found."
+            exit 1
+          fi
+      # ---------------------------------------------------------
+      # 10. Verify embedded frameworks/extensions
+      # ---------------------------------------------------------
+      - name: Verify App Bundle
+        run: |
+          set -e
+          APP="$APP_PATH"
+          echo "===== APP CONTENTS ====="
+          find "$APP" -maxdepth 3 -print | sort | head -n 300
+          echo ""
+          echo "===== FRAMEWORKS ====="
+          if [ -d "$APP/Frameworks" ]; then
+            find "$APP/Frameworks" -maxdepth 2 -print
+          else
+            echo "No Frameworks directory."
+          fi
+          echo ""
+          echo "===== EXTENSIONS ====="
+          if [ -d "$APP/PlugIns" ]; then
+            find "$APP/PlugIns" -maxdepth 2 -print
+          else
+            echo "No PlugIns directory."
+          fi
+          test -f "$APP/Info.plist"
+      # ---------------------------------------------------------
+      # 11. Package IPA
+      # ---------------------------------------------------------
+      - name: Package IPA
+        run: |
+          set -e
+          rm -rf build/IPA
+          mkdir -p build/IPA/Payload
+          cp -R "$APP_PATH" build/IPA/Payload/ExtendReality.app
+          cd build/IPA
+          /usr/bin/zip \
+            -qry \
+            ../ExtendReality.ipa \
+            Payload
+          cd ../..
+          test -f build/ExtendReality.ipa
+          echo "===== IPA SIZE ====="
+          ls -lh build/ExtendReality.ipa
+      # ---------------------------------------------------------
+      # 12. Verify IPA
+      # ---------------------------------------------------------
       - name: Verify IPA Structure
         run: |
-          unzip -l build/ExtendReality.ipa | grep "Payload/ExtendReality.app/"
-          file build/Payload/ExtendReality.app/ExtendReality
-
-      - name: Upload Artifact
+          set -e
+          echo "===== IPA CONTENTS ====="
+          unzip -l build/ExtendReality.ipa \
+            | grep -E "Payload/ExtendReality.app/|RoyalVNCKit"
+          echo ""
+          echo "===== IPA APP ====="
+          unzip -l build/ExtendReality.ipa \
+            | grep "Payload/ExtendReality.app/Info.plist"
+          echo ""
+          echo "===== FINAL CHECK ====="
+          unzip -t build/ExtendReality.ipa
+      # ---------------------------------------------------------
+      # 13. Upload IPA
+      # ---------------------------------------------------------
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ExtendReality-iOS-IPA
           path: build/ExtendReality.ipa
+          if-no-files-found: error
+          retention-days: 30
+      # ---------------------------------------------------------
+      # 14. Upload build log
+      # ---------------------------------------------------------
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtendReality-Build-Logs
+          path: |
+            build/xcodebuild.log
+          if-no-files-found: ignore
           retention-days: 30
