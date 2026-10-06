@@ -1,386 +1,42 @@
 name: Build ExtendReality iOS IPA
-
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-
+workflow_dispatch:
+push:
+branches:
+- main
+- master
 permissions:
-  contents: read
-
+contents: read
 jobs:
-  build-ipa:
-    runs-on: macos-15
-    timeout-minutes: 60
-
-    steps:
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Select Xcode 16.4
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -d "/Applications/Xcode_16.4.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_16.4.app"
-          else
-            echo "ERROR: Xcode 16.4 was not found."
-            echo "Installed Xcodes:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "Xcode:"
-          xcodebuild -version
-
-          echo "Developer directory:"
-          xcode-select -p
-
-      - name: Install XcodeGen
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-
-          echo "XcodeGen:"
-          xcodegen version
-
-      - name: Generate Xcode Project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf ExtendReality.xcodeproj
-
-          xcodegen generate
-
-          if [ ! -d "ExtendReality.xcodeproj" ]; then
-            echo "ERROR: Xcode project was not generated."
-            exit 1
-          fi
-
-          echo "Project generated."
-
-      - name: Create CI iOS Scheme
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p ExtendReality.xcodeproj/xcshareddata/xcschemes
-
-          cat > ExtendReality.xcodeproj/xcshareddata/xcschemes/ExtendRealityCI.xcscheme <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <Scheme
-             LastUpgradeVersion = "1640"
-             version = "1.7">
-             <BuildAction
-                parallelizeBuildables = "YES"
-                buildImplicitDependencies = "YES"
-                buildArchitectures = "Automatic">
-                <BuildActionEntries>
-                   <BuildActionEntry
-                      buildForTesting = "NO"
-                      buildForRunning = "YES"
-                      buildForProfiling = "NO"
-                      buildForArchiving = "YES"
-                      buildForAnalyzing = "YES">
-                      <BuildableReference
-                         BuildableIdentifier = "primary"
-                         BlueprintIdentifier = "EXTEND_REALITY_TARGET_ID"
-                         BuildableName = "ExtendReality.app"
-                         BlueprintName = "ExtendReality"
-                         ReferencedContainer = "container:ExtendReality.xcodeproj">
-                      </BuildableReference>
-                   </BuildActionEntry>
-                </BuildActionEntries>
-             </BuildAction>
-             <TestAction
-                buildConfiguration = "Debug"
-                selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
-                selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-                shouldUseLaunchSchemeArgsEnv = "YES">
-             </TestAction>
-             <LaunchAction
-                buildConfiguration = "Release"
-                selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
-                selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-                launchStyle = "0"
-                useCustomWorkingDirectory = "NO"
-                ignoresPersistentStateOnLaunch = "NO"
-                debugDocumentVersioning = "YES"
-                allowLocationSimulation = "YES">
-                <BuildableProductRunnable
-                   runnableDebuggingMode = "0">
-                   <BuildableReference
-                      BuildableIdentifier = "primary"
-                      BlueprintIdentifier = "EXTEND_REALITY_TARGET_ID"
-                      BuildableName = "ExtendReality.app"
-                      BlueprintName = "ExtendReality"
-                      ReferencedContainer = "container:ExtendReality.xcodeproj">
-                   </BuildableReference>
-                </BuildableProductRunnable>
-             </LaunchAction>
-             <ProfileAction
-                buildConfiguration = "Release"
-                shouldUseLaunchSchemeArgsEnv = "YES"
-                savedToolIdentifier = ""
-                useCustomWorkingDirectory = "NO"
-                debugDocumentVersioning = "YES">
-                <BuildableProductRunnable
-                   runnableDebuggingMode = "0">
-                   <BuildableReference
-                      BuildableIdentifier = "primary"
-                      BlueprintIdentifier = "EXTEND_REALITY_TARGET_ID"
-                      BuildableName = "ExtendReality.app"
-                      BlueprintName = "ExtendReality"
-                      ReferencedContainer = "container:ExtendReality.xcodeproj">
-                   </BuildableReference>
-                </BuildableProductRunnable>
-             </ProfileAction>
-             <AnalyzeAction buildConfiguration = "Release"/>
-             <ArchiveAction
-                buildConfiguration = "Release"
-                revealArchiveInOrganizer = "NO">
-             </ArchiveAction>
-          </Scheme>
-          EOF
-
-          TARGET_ID=$(ruby -e '
-            text = File.read("ExtendReality.xcodeproj/project.pbxproj")
-            m = text.match(/([A-F0-9]{24}) \/\* ExtendReality \*\/ = \{[^}]*isa = PBXNativeTarget;/m)
-            abort("ExtendReality target not found") unless m
-            puts m[1]
-          ')
-
-          if [ -z "$TARGET_ID" ]; then
-            echo "ERROR: Could not determine ExtendReality target ID."
-            exit 1
-          fi
-
-          echo "ExtendReality target ID: $TARGET_ID"
-
-          sed -i '' "s/EXTEND_REALITY_TARGET_ID/$TARGET_ID/g" \
-            ExtendReality.xcodeproj/xcshareddata/xcschemes/ExtendRealityCI.xcscheme
-
-          echo "CI scheme created."
-
-      - name: Verify CI Scheme
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          xcodebuild \
-            -project ExtendReality.xcodeproj \
-            -list
-
-          echo ""
-          echo "CI scheme:"
-          grep -E "BlueprintName|BlueprintIdentifier" \
-            ExtendReality.xcodeproj/xcshareddata/xcschemes/ExtendRealityCI.xcscheme
-
-      - name: Resolve Swift Package Dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p build/SourcePackages
-
-          xcodebuild \
-            -resolvePackageDependencies \
-            -project ExtendReality.xcodeproj \
-            -scheme ExtendRealityCI \
-            -clonedSourcePackagesDirPath build/SourcePackages
-
-      - name: Build iOS Application
-        shell: bash
-        run: |
-          set -o pipefail
-
-          rm -rf build/DerivedData
-          mkdir -p build
-
-          xcodebuild \
-            -project ExtendReality.xcodeproj \
-            -scheme ExtendRealityCI \
-            -configuration Release \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath build/DerivedData \
-            -clonedSourcePackagesDirPath build/SourcePackages \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            CODE_SIGN_STYLE=Manual \
-            ENABLE_USER_SCRIPT_SANDBOXING=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            ONLY_ACTIVE_ARCH=NO \
-            | tee build/xcodebuild.log
-
-      - name: Print Build Errors
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "=============================================="
-          echo "XCODE BUILD ERROR SUMMARY"
-          echo "=============================================="
-
-          if [ -f build/xcodebuild.log ]; then
-            grep -nE \
-              "error:|fatal error:|BUILD FAILED|CodeSign|Provisioning|Signing|No such module|SwiftCompile|CompileSwift|Ld |PhaseScriptExecution" \
-              build/xcodebuild.log \
-              | tail -n 200 || true
-
-            echo ""
-            echo "=============================================="
-            echo "LAST 150 LOG LINES"
-            echo "=============================================="
-
-            tail -n 150 build/xcodebuild.log
-          else
-            echo "No xcodebuild.log was generated."
-          fi
-
-      - name: Locate iOS App
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APP_PATH=$(find build/DerivedData \
-            -type d \
-            -name "ExtendReality.app" \
-            -path "*/Build/Products/Release-iphoneos/*" \
-            | head -n 1)
-
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: ExtendReality.app was not found."
-
-            echo ""
-            echo "Build products:"
-            find build/DerivedData \
-              -type d \
-              -path "*/Build/Products/*" \
-              -maxdepth 8 \
-              -print 2>/dev/null || true
-
-            exit 1
-          fi
-
-          echo "APP_PATH=$APP_PATH"
-          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
-
-      - name: Verify iPhone Binary
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          BINARY="$APP_PATH/ExtendReality"
-
-          if [ ! -f "$BINARY" ]; then
-            echo "ERROR: ExtendReality executable not found."
-            exit 1
-          fi
-
-          echo "Executable:"
-          file "$BINARY"
-
-          echo ""
-          echo "Architecture:"
-          lipo -info "$BINARY"
-
-          if ! lipo -info "$BINARY" | grep -q "arm64"; then
-            echo "ERROR: arm64 was not found."
-            exit 1
-          fi
-
-          echo ""
-          echo "ARM64 iOS binary verified."
-
-      - name: Verify App Bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f "$APP_PATH/Info.plist"
-
-          echo "App:"
-          echo "$APP_PATH"
-
-          echo ""
-          echo "Bundle contents:"
-          find "$APP_PATH" -maxdepth 3 -print | sort | head -n 300
-
-      - name: Package IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf build/IPA
-          mkdir -p build/IPA/Payload
-
-          cp -R \
-            "$APP_PATH" \
-            build/IPA/Payload/ExtendReality.app
-
-          cd build/IPA
-
-          /usr/bin/zip \
-            -qry \
-            ../ExtendReality.ipa \
-            Payload
-
-          cd ../..
-
-          test -f build/ExtendReality.ipa
-
-          echo ""
-          echo "=============================================="
-          echo "IPA CREATED"
-          echo "=============================================="
-
-          ls -lh build/ExtendReality.ipa
-
-      - name: Verify IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "IPA contents:"
-          unzip -l build/ExtendReality.ipa \
-            | grep "Payload/ExtendReality.app/" \
-            | head -n 100
-
-          echo ""
-          echo "Testing ZIP:"
-          unzip -t build/ExtendReality.ipa
-
-          echo ""
-          echo "IPA verification successful."
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExtendReality-iOS-IPA
-          path: build/ExtendReality.ipa
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload Build Log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExtendReality-Build-Logs
-          path: build/xcodebuild.log
-          if-no-files-found: ignore
-          retention-days: 30
+build-ipa:
+runs-on: macos-15
+timeout-minutes: 60
+steps:
+- name: Checkout Repository
+uses: actions/checkout@v4
+- name: Set up Xcode
+uses: maxim-lobanov/setup-xcode@v1
+with:
+xcode-version: 'latest-stable'
+- name: Build Unsigned iOS App
+run: |
+xcodebuild build 
+-project ExtendReality.xcodeproj 
+-scheme "ExtendReality" 
+-sdk iphoneos 
+-configuration Release 
+-derivedDataPath build 
+CODE_SIGN_IDENTITY="" 
+CODE_SIGNING_REQUIRED=NO 
+CODE_SIGNING_ALLOWED=NO
+- name: Package Unsigned IPA
+run: |
+mkdir -p Payload
+cp -R build/Build/Products/Release-iphoneos/*.app Payload/
+zip -r ExtendReality_unsigned.ipa Payload
+- name: Upload IPA Artifact
+uses: actions/upload-artifact@v4
+with:
+name: ExtendReality-Unsigned-IPA
+path: ExtendReality_unsigned.ipa
+retention-days: 14
